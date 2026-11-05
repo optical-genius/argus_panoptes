@@ -1,0 +1,235 @@
+{
+  "name": "argus-panoptes",
+  "displayName": "Argus Panoptes: AI Data Leak Prevention (DLP)",
+  "description": "Smart DLP Guardrail for VS Code & Antigravity IDE: intercepts AI prompts, detects PII/secrets/Finnish HETU, and prevents leaks to LM Studio, Ollama, and Cloud LLMs.",
+  "version": "0.2.0",
+  "publisher": "optical-genius",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/optical-genius/argus-panoptes.git"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Machine Learning",
+    "Security",
+    "Programming Languages"
+  ],
+  "keywords": [
+    "dlp",
+    "security",
+    "pii",
+    "hetu",
+    "lm-studio",
+    "ollama",
+    "privacy",
+    "guardrails",
+    "antigravity"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "argus.startProxy",
+        "title": "Argus: Start DLP Guardian Proxy",
+        "category": "Argus DLP"
+      },
+      {
+        "command": "argus.stopProxy",
+        "title": "Argus: Stop DLP Guardian Proxy",
+        "category": "Argus DLP"
+      },
+      {
+        "command": "argus.restartProxy",
+        "title": "Argus: Restart DLP Guardian Proxy",
+        "category": "Argus DLP"
+      },
+      {
+        "command": "argus.scanSelection",
+        "title": "Argus: Scan Selected Text for Sensitive Leaks",
+        "category": "Argus DLP"
+      },
+      {
+        "command": "argus.openDashboard",
+        "title": "Argus: Open Security Dashboard & Audit Log",
+        "category": "Argus DLP"
+      },
+      {
+        "command": "argus.testTargetConnection",
+        "title": "Argus: Test Connection to Target LLM (LM Studio / Ollama)",
+        "category": "Argus DLP"
+      },
+      {
+        "command": "argus.auditAgents",
+        "title": "Argus: Audit Active AI Agents & Traffic Egress",
+        "category": "Argus DLP"
+      },
+      {
+        "command": "argus.enableAiIgnore",
+        "title": "Argus: Create AI Ignore Shield (.aiignore)",
+        "category": "Argus DLP"
+      },
+      {
+        "command": "argus.enableGlobalProxy",
+        "title": "Argus: Route Global IDE Traffic through Argus Proxy",
+        "category": "Argus DLP"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "argus-panoptes",
+          "title": "Argus Panoptes DLP",
+          "icon": "media/shield.svg"
+        }
+      ]
+    },
+    "views": {
+      "argus-panoptes": [
+        {
+          "type": "webview",
+          "id": "argus.dashboardView",
+          "name": "Security Dashboard & Audit"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Argus Panoptes AI DLP Guardrail",
+      "properties": {
+        "argus.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable or disable Argus Panoptes DLP guardrail."
+        },
+        "argus.mode": {
+          "type": "string",
+          "enum": [
+            "mask",
+            "block",
+            "confirm",
+            "audit_only"
+          ],
+          "enumDescriptions": [
+            "Mask (Anonymize): Replaces sensitive data with tokens and unmasks in LLM response",
+            "Block: Completely blocks prompt if sensitive data is detected",
+            "Confirm: Prompts user with a diff preview before sending",
+            "Audit only: Allows prompt through but logs all detected leaks"
+          ],
+          "default": "mask",
+          "description": "Action policy when sensitive data or secrets are detected."
+        },
+        "argus.proxy.port": {
+          "type": "number",
+          "default": 8765,
+          "description": "Local port on which the Argus DLP Proxy listens (default: 8765)."
+        },
+        "argus.proxy.host": {
+          "type": "string",
+          "default": "127.0.0.1",
+          "description": "Host binding for Argus DLP Proxy."
+        },
+        "argus.target.provider": {
+          "type": "string",
+          "enum": [
+            "lm-studio",
+            "ollama",
+            "openai",
+            "custom"
+          ],
+          "default": "lm-studio",
+          "description": "Target LLM provider."
+        },
+        "argus.target.baseUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:1234/v1",
+          "description": "Base URL of the target LLM API (e.g. LM Studio: http://127.0.0.1:1234/v1, Ollama: http://127.0.0.1:11434/v1)."
+        },
+        "argus.target.apiKey": {
+          "type": "string",
+          "default": "lm-studio",
+          "description": "API Key sent to the target LLM (for LM Studio/Ollama any string works, for OpenAI provide your key)."
+        },
+        "argus.detectors.apiKeysAndSecrets": {
+          "type": "boolean",
+          "default": true,
+          "description": "Detect API keys, JWTs, AWS keys, private SSH keys, and database connection strings."
+        },
+        "argus.detectors.piiGeneral": {
+          "type": "boolean",
+          "default": true,
+          "description": "Detect emails, phone numbers, IP addresses, and credit cards."
+        },
+        "argus.detectors.finnishHetu": {
+          "type": "boolean",
+          "default": true,
+          "description": "Detect Finnish Personal Identity Codes (Henkilötunnus / HETU) with checksum verification."
+        },
+        "argus.detectors.financialIban": {
+          "type": "boolean",
+          "default": true,
+          "description": "Detect International Bank Account Numbers (IBAN) with Mod-97 checksum."
+        },
+        "argus.detectors.highEntropyStrings": {
+          "type": "boolean",
+          "default": true,
+          "description": "Detect random high-entropy strings (potential unknown secrets/passwords via Shannon Entropy)."
+        },
+        "argus.agentProtection.blockEnvFiles": {
+          "type": "boolean",
+          "default": true,
+          "description": "Antigravity IDE & Agentic protection: block inclusion of .env and secret files in agent context."
+        },
+        "argus.customRegexRules": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "pattern": {
+                "type": "string"
+              },
+              "severity": {
+                "type": "string",
+                "enum": ["low", "medium", "high", "critical"]
+              }
+            },
+            "required": ["name", "pattern"]
+          },
+          "default": [],
+          "description": "Custom regular expressions for detecting project-specific secrets or internal codes."
+        },
+        "argus.whitelistedPaths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "**/test/**",
+            "**/tests/**",
+            "**/.env.example",
+            "**/fixtures/**"
+          ],
+          "description": "File path glob patterns where secret detection should be ignored (e.g. unit test mocks)."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "test": "tsc -p ./tsconfig.test.json && node dist/tests/test_scanner.js",
+    "start:proxy": "node scripts/run_standalone_proxy.js"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.3.3"
+  }
+}
