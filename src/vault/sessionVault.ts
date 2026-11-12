@@ -1,3 +1,4 @@
+import * as crypto from 'crypto';
 import { DetectedEntity } from '../scanner/types';
 
 export interface VaultEntry {
@@ -18,7 +19,15 @@ export interface VaultEntry {
 export class SessionVault {
   private tokenToOriginal: Map<string, VaultEntry> = new Map();
   private originalToToken: Map<string, string> = new Map();
-  private categoryCounters: Map<string, number> = new Map();
+
+  /**
+   * Starts a new request scope and discards mappings from the previous one.
+   * Proxy requests use a separate vault instance as an additional isolation
+   * boundary; this method is useful for callers that reuse a vault explicitly.
+   */
+  public beginRequest(): void {
+    this.clear();
+  }
 
   /**
    * Clears all session entries.
@@ -26,21 +35,22 @@ export class SessionVault {
   public clear(): void {
     this.tokenToOriginal.clear();
     this.originalToToken.clear();
-    this.categoryCounters.clear();
   }
 
   /**
    * Generates or retrieves an existing placeholder token for a sensitive value.
    */
   public getOrCreateToken(originalValue: string, category: string): string {
-    if (this.originalToToken.has(originalValue)) {
-      return this.originalToToken.get(originalValue)!;
+    const mappingKey = `${category}\u0000${originalValue}`;
+    if (this.originalToToken.has(mappingKey)) {
+      return this.originalToToken.get(mappingKey)!;
     }
 
-    const currentCount = (this.categoryCounters.get(category) || 0) + 1;
-    this.categoryCounters.set(category, currentCount);
-
-    const placeholder = `<ARGUS_${category}_${currentCount}>`;
+    let placeholder: string;
+    do {
+      const opaqueId = crypto.randomBytes(16).toString('hex');
+      placeholder = `<ARGUS_${category}_${opaqueId}>`;
+    } while (this.tokenToOriginal.has(placeholder));
 
     const entry: VaultEntry = {
       placeholder,
@@ -50,7 +60,7 @@ export class SessionVault {
     };
 
     this.tokenToOriginal.set(placeholder, entry);
-    this.originalToToken.set(originalValue, placeholder);
+    this.originalToToken.set(mappingKey, placeholder);
 
     return placeholder;
   }

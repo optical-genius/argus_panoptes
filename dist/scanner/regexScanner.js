@@ -120,7 +120,10 @@ exports.PII_RULES = [
     {
         category: types_1.DetectionCategory.PHONE_NUMBER,
         name: 'Finnish Phone Number',
-        pattern: /(?:\+358|0)(?:[ -]?\d{1,4}){1,3}[ -]?\d{4,8}\b/g,
+        // Require a numeric boundary on the left as well as on the right. The
+        // extra two-character guard prevents matching a phone-looking suffix
+        // after a digit separated by a space, for example inside a card or HETU.
+        pattern: /(?<!\d)(?<!\d[ -])(?:\+358|0)(?:[ -]?\d{1,4}){1,3}[ -]?\d{4,8}(?![A-Za-z0-9])(?![ -/]\d)/g,
         severity: types_1.SensitivitySeverity.LOW,
         confidence: 0.85
     },

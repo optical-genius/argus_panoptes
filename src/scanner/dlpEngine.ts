@@ -226,25 +226,41 @@ export class DlpEngine {
       return entities;
     }
 
-    // Sort by startIndex ascending, then length descending
-    entities.sort((a, b) => {
-      if (a.startIndex !== b.startIndex) {
-        return a.startIndex - b.startIndex;
+    const severityRank: Record<SensitivitySeverity, number> = {
+      [SensitivitySeverity.CRITICAL]: 4,
+      [SensitivitySeverity.HIGH]: 3,
+      [SensitivitySeverity.MEDIUM]: 2,
+      [SensitivitySeverity.LOW]: 1
+    };
+
+    // Select the strongest non-overlapping entities first. This makes the
+    // precedence explicit: a validated IBAN/HETU/card cannot be replaced by
+    // a lower-severity phone suffix that happens to overlap it.
+    const prioritized = [...entities].sort((a, b) => {
+      const severityDifference = severityRank[b.severity] - severityRank[a.severity];
+      if (severityDifference !== 0) {
+        return severityDifference;
       }
-      return (b.endIndex - b.startIndex) - (a.endIndex - a.startIndex);
+
+      const lengthDifference = (b.endIndex - b.startIndex) - (a.endIndex - a.startIndex);
+      if (lengthDifference !== 0) {
+        return lengthDifference;
+      }
+
+      return a.startIndex - b.startIndex;
     });
 
-    const result: DetectedEntity[] = [];
-    let lastEnd = -1;
-
-    for (const entity of entities) {
-      if (entity.startIndex >= lastEnd) {
-        result.push(entity);
-        lastEnd = entity.endIndex;
+    const selected: DetectedEntity[] = [];
+    for (const entity of prioritized) {
+      const overlaps = selected.some(existing =>
+        entity.startIndex < existing.endIndex && entity.endIndex > existing.startIndex
+      );
+      if (!overlaps) {
+        selected.push(entity);
       }
     }
 
-    return result;
+    return selected.sort((a, b) => a.startIndex - b.startIndex);
   }
 
   private calculateHighestSeverity(entities: DetectedEntity[]): SensitivitySeverity | null {

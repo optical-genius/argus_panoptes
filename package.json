@@ -116,7 +116,7 @@
           "enumDescriptions": [
             "Mask (Anonymize): Replaces sensitive data with tokens and unmasks in LLM response",
             "Block: Completely blocks prompt if sensitive data is detected",
-            "Confirm: Prompts user with a diff preview before sending",
+            "Confirm: Blocks until a host confirmation flow is available",
             "Audit only: Allows prompt through but logs all detected leaks"
           ],
           "default": "mask",
@@ -224,7 +224,7 @@
     "vscode:prepublish": "npm run compile",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "test": "tsc -p ./tsconfig.test.json && node dist/tests/test_scanner.js",
+    "test": "tsc -p ./tsconfig.test.json && node dist/tests/test_scanner.js && node dist/tests/test_token_display.js && node dist/tests/test_regression.js",
     "start:proxy": "node scripts/run_standalone_proxy.js"
   },
   "devDependencies": {

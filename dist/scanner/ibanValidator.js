@@ -34,17 +34,55 @@ function validateIban(iban) {
     return remainder === 1;
 }
 function findIbans(text) {
-    // Regex finding potential IBANs (e.g., FI21 1234 5600 0007 85 or FI2112345600000785)
-    const ibanRegex = /\b[A-Z]{2}[0-9]{2}(?:\s?[0-9A-Z]{4}){2,7}\b/gi;
     const found = [];
+    const startRegex = /\b[A-Z]{2}[0-9]{2}/gi;
+    const minimumBodyLength = 11;
+    const maximumBodyLength = 30;
     let match;
-    while ((match = ibanRegex.exec(text)) !== null) {
-        const raw = match[0];
-        if (validateIban(raw)) {
-            found.push({
-                iban: raw,
-                index: match.index
-            });
+    while ((match = startRegex.exec(text)) !== null) {
+        const startIndex = match.index;
+        const candidateEndIndexes = [];
+        let cursor = startIndex + 4;
+        let bodyLength = 0;
+        // Consume at most the IBAN body. Separators are allowed between characters,
+        // but words following an IBAN are considered only as validation candidates,
+        // not as part of the accepted match.
+        while (cursor < text.length && bodyLength < maximumBodyLength) {
+            const current = text[cursor];
+            if (/[A-Z0-9]/i.test(current)) {
+                cursor++;
+                bodyLength++;
+                candidateEndIndexes.push(cursor);
+                continue;
+            }
+            if ((current === ' ' || current === '-') && /[A-Z0-9]/i.test(text[cursor + 1] || '')) {
+                cursor++;
+                cursor++;
+                bodyLength++;
+                candidateEndIndexes.push(cursor);
+                continue;
+            }
+            break;
+        }
+        // Choose the shortest valid prefix. This prevents a valid IBAN from
+        // absorbing following words such as "as" or "and".
+        for (const endIndex of candidateEndIndexes) {
+            if (endIndex - (startIndex + 4) < minimumBodyLength) {
+                continue;
+            }
+            const raw = text.slice(startIndex, endIndex);
+            const nextCharacter = text[endIndex] || '';
+            if (/[A-Z0-9]/i.test(nextCharacter)) {
+                continue;
+            }
+            if (validateIban(raw)) {
+                found.push({
+                    iban: raw,
+                    index: startIndex
+                });
+                startRegex.lastIndex = endIndex;
+                break;
+            }
         }
     }
     return found;

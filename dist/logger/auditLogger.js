@@ -38,6 +38,7 @@ const crypto = __importStar(require("crypto"));
 const fs = __importStar(require("fs"));
 const path = __importStar(require("path"));
 class AuditLogger {
+    static fingerprintSalt = crypto.randomBytes(32);
     logFilePath;
     recentRecords = [];
     maxRecentRecords = 100;
@@ -59,10 +60,11 @@ class AuditLogger {
         this.onRecordAddedListeners.push(listener);
     }
     /**
-     * Hashes a secret entity value with SHA-256 for privacy-preserving auditing.
+     * Creates a process-local HMAC fingerprint for privacy-preserving auditing.
+     * The random salt prevents offline dictionary matching from the log alone.
      */
     static hashEntity(value) {
-        return crypto.createHash('sha256').update(value).digest('hex').slice(0, 16);
+        return crypto.createHmac('sha256', AuditLogger.fingerprintSalt).update(value).digest('hex').slice(0, 16);
     }
     /**
      * Logs a DLP scanning event.

@@ -1,9 +1,82 @@
 import * as http from 'http';
 import * as https from 'https';
 import { URL } from 'url';
-import { ArgusConfig, DlpScanResult } from '../scanner/types';
+import { ArgusConfig } from '../scanner/types';
 import { DlpEngine } from '../scanner/dlpEngine';
 import { AuditLogger } from '../logger/auditLogger';
+import { SessionVault } from '../vault/sessionVault';
+
+type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
+
+interface JsonInspection {
+  keys: string[];
+  values: string[];
+  supported: boolean;
+}
+
+function isJsonObject(value: unknown): value is { [key: string]: JsonValue } {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function inspectJson(value: unknown, inspection: JsonInspection): void {
+  if (typeof value === 'string') {
+    inspection.values.push(value);
+    return;
+  }
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      inspectJson(item, inspection);
+    }
+    return;
+  }
+
+  if (isJsonObject(value)) {
+    for (const [key, item] of Object.entries(value)) {
+      inspection.keys.push(key);
+      inspectJson(item, inspection);
+    }
+    return;
+  }
+
+  if (value !== null && typeof value !== 'boolean' && typeof value !== 'number') {
+    inspection.supported = false;
+  }
+}
+
+function sanitizeStringValues(value: unknown, engine: DlpEngine): JsonValue {
+  if (typeof value === 'string') {
+    return engine.scan(value).sanitizedText;
+  }
+
+  if (Array.isArray(value)) {
+    return value.map(item => sanitizeStringValues(item, engine));
+  }
+
+  if (isJsonObject(value)) {
+    const sanitized: { [key: string]: JsonValue } = {};
+    for (const [key, item] of Object.entries(value)) {
+      sanitized[key] = sanitizeStringValues(item, engine);
+    }
+    return sanitized;
+  }
+
+  return value as JsonValue;
+}
+
+function containsProperty(value: unknown, propertyName: string): boolean {
+  if (Array.isArray(value)) {
+    return value.some(item => containsProperty(item, propertyName));
+  }
+
+  if (isJsonObject(value)) {
+    return Object.entries(value).some(([key, item]) =>
+      key === propertyName || containsProperty(item, propertyName)
+    );
+  }
+
+  return false;
+}
 
 export class DlpProxyServer {
   private server: http.Server | null = null;
@@ -140,77 +213,88 @@ export class DlpProxyServer {
 
   private handleCompletionsProxy(req: http.IncomingMessage, res: http.ServerResponse): void {
     this.collectBody(req, (rawBody) => {
+      let payload: unknown;
       try {
-        const payload = JSON.parse(rawBody);
-        let combinedText = '';
+        payload = JSON.parse(rawBody) as unknown;
+      } catch {
+        this.writeJsonError(res, 400, 'invalid_json', 'Request was not forwarded because its JSON payload could not be scanned safely.');
+        return;
+      }
 
-        if (Array.isArray(payload.messages)) {
-          combinedText = payload.messages
-            .map((m: any) => (typeof m.content === 'string' ? m.content : ''))
-            .join('\n');
-        } else if (typeof payload.prompt === 'string') {
-          combinedText = payload.prompt;
-        }
+      if (this.config.agentProtection.inspectToolCalls === false && containsProperty(payload, 'tool_calls')) {
+        this.writeJsonError(res, 501, 'tool_call_inspection_disabled', 'Request was not forwarded because tool-call inspection is disabled.');
+        return;
+      }
 
-        const scanResult = this.dlpEngine.scan(combinedText);
+      if (!isJsonObject(payload)) {
+        this.writeJsonError(res, 400, 'unsupported_json_structure', 'Request was not forwarded because the JSON root must be an object.');
+        return;
+      }
 
-        if (scanResult.hasViolations && this.config.enabled) {
-          const violationsSummary = scanResult.entities
+      const requestEngine = new DlpEngine(this.config, new SessionVault());
+      const inspection: JsonInspection = { keys: [], values: [], supported: true };
+      inspectJson(payload, inspection);
+      if (!inspection.supported) {
+        this.writeJsonError(res, 400, 'unsupported_json_structure', 'Request was not forwarded because the JSON structure could not be scanned safely.');
+        return;
+      }
+
+      const combinedText = inspection.values.join('\n');
+      const scanResult = requestEngine.scan(combinedText);
+
+      if (this.config.enabled) {
+        const keyViolation = inspection.keys
+          .map(key => ({ key, scan: requestEngine.scan(key) }))
+          .find(item => item.scan.hasViolations);
+
+        if (keyViolation) {
+          const violationsSummary = keyViolation.scan.entities
             .map(e => `${e.name} (${e.category})`)
             .join(', ');
+          this.auditLogger.logEvent('blocked', keyViolation.scan, keyViolation.key, this.getModelName(payload));
+          this.writeJsonError(res, 400, 'sensitive_json_key', `Request blocked: protected data was found in a JSON key (${violationsSummary}).`);
+          return;
+        }
+      }
 
-          // Policy 1: BLOCK
-          if (this.config.mode === 'block') {
-            this.auditLogger.logEvent('blocked', scanResult, combinedText, payload.model || 'unknown');
-            res.writeHead(403, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({
-              error: {
-                message: `🛡️ [Argus Panoptes DLP] Request blocked! Confidential data detected: ${violationsSummary}`,
-                type: 'dlp_violation',
-                code: 'argus_leak_prevention',
-                violations: scanResult.entities.map(e => ({
-                  category: e.category,
-                  name: e.name,
-                  severity: e.severity
-                }))
-              }
-            }));
-            return;
-          }
+      if (scanResult.hasViolations && this.config.enabled) {
+        const violationsSummary = scanResult.entities
+          .map(e => `${e.name} (${e.category})`)
+          .join(', ');
 
-          // Policy 2: MASK (Sanitize & Unmask on return)
-          if (this.config.mode === 'mask') {
-            this.auditLogger.logEvent('masked', scanResult, combinedText, payload.model || 'unknown');
-
-            // Sanitize each message individually
-            if (Array.isArray(payload.messages)) {
-              for (const msg of payload.messages) {
-                if (typeof msg.content === 'string') {
-                  const msgScan = this.dlpEngine.scan(msg.content);
-                  msg.content = msgScan.sanitizedText;
-                }
-              }
-            } else if (typeof payload.prompt === 'string') {
-              payload.prompt = scanResult.sanitizedText;
-            }
-
-            const sanitizedBody = JSON.stringify(payload);
-            this.forwardAndTransform(req, res, sanitizedBody, payload.stream === true);
-            return;
-          }
-
-          // Policy 3: AUDIT ONLY
-          if (this.config.mode === 'audit_only') {
-            this.auditLogger.logEvent('audited_pass', scanResult, combinedText, payload.model || 'unknown');
-          }
+        // Policy 1: BLOCK
+        if (this.config.mode === 'block') {
+          this.auditLogger.logEvent('blocked', scanResult, combinedText, this.getModelName(payload));
+          this.writeDlpBlocked(res, 403, violationsSummary, scanResult);
+          return;
         }
 
-        // Clean prompt or audit_only: forward as is
-        this.forwardAndTransform(req, res, rawBody, payload.stream === true);
-      } catch (err: any) {
-        // Fallback: forward raw if JSON parsing failed
-        this.forwardAndTransform(req, res, rawBody, false);
+        // Policy 2: MASK (Sanitize & Unmask on return)
+        if (this.config.mode === 'mask') {
+          this.auditLogger.logEvent('masked', scanResult, combinedText, this.getModelName(payload));
+          const sanitizedPayload = sanitizeStringValues(payload, requestEngine);
+          const sanitizedBody = JSON.stringify(sanitizedPayload);
+          this.forwardAndTransform(req, res, sanitizedBody, this.isStreamingPayload(payload), requestEngine.getVault());
+          return;
+        }
+
+        // Policy 3: CONFIRM. The proxy has no interactive UI channel, so it
+        // must fail closed instead of pretending that a user approved the leak.
+        if (this.config.mode === 'confirm') {
+          this.auditLogger.logEvent('blocked', scanResult, combinedText, this.getModelName(payload));
+          this.writeJsonError(res, 428, 'confirmation_required', `Request blocked: confirmation is required before sending detected data (${violationsSummary}).`);
+          return;
+        }
+
+        // Policy 4: AUDIT ONLY. This mode intentionally forwards after a
+        // successful scan and records the finding.
+        if (this.config.mode === 'audit_only') {
+          this.auditLogger.logEvent('audited_pass', scanResult, combinedText, this.getModelName(payload));
+        }
       }
+
+      // Clean prompt or audit_only: forward as is after successful parsing.
+      this.forwardAndTransform(req, res, rawBody, this.isStreamingPayload(payload), requestEngine.getVault());
     });
   }
 
@@ -218,7 +302,8 @@ export class DlpProxyServer {
     clientReq: http.IncomingMessage,
     clientRes: http.ServerResponse,
     bodyToSend: string,
-    isStream: boolean
+    isStream: boolean,
+    vault: SessionVault
   ): void {
     const targetUrl = new URL(this.config.targetBaseUrl);
     // Append path
@@ -254,10 +339,10 @@ export class DlpProxyServer {
         targetRes.on('end', () => {
           try {
             // Unmask placeholders in target LLM response before returning to IDE
-            const unmaskedData = this.dlpEngine.getVault().unmaskText(respData);
+            const unmaskedData = vault.unmaskText(respData);
 
             clientRes.writeHead(statusCode, {
-              ...targetRes.headers,
+              ...this.forwardResponseHeaders(targetRes.headers),
               'content-length': Buffer.byteLength(unmaskedData)
             });
             clientRes.end(unmaskedData);
@@ -268,16 +353,31 @@ export class DlpProxyServer {
         });
       } else {
         // Handle Server-Sent Events (SSE) streaming
-        clientRes.writeHead(statusCode, targetRes.headers);
+        clientRes.writeHead(statusCode, this.forwardResponseHeaders(targetRes.headers));
+        let pendingChunk = '';
 
         targetRes.on('data', (chunk) => {
-          // Unmask streaming chunk text on the fly
-          const chunkStr = chunk.toString('utf8');
-          const unmaskedChunk = this.dlpEngine.getVault().unmaskText(chunkStr);
-          clientRes.write(unmaskedChunk);
+          pendingChunk += chunk.toString('utf8');
+          const tokenStart = pendingChunk.lastIndexOf('<ARGUS_');
+          const tokenEnd = tokenStart >= 0 ? pendingChunk.indexOf('>', tokenStart) : -1;
+
+          if (tokenStart >= 0 && tokenEnd < 0) {
+            const flushable = pendingChunk.slice(0, tokenStart);
+            if (flushable) {
+              clientRes.write(vault.unmaskText(flushable));
+            }
+            pendingChunk = pendingChunk.slice(tokenStart);
+            return;
+          }
+
+          clientRes.write(vault.unmaskText(pendingChunk));
+          pendingChunk = '';
         });
 
         targetRes.on('end', () => {
+          if (pendingChunk) {
+            clientRes.write(vault.unmaskText(pendingChunk));
+          }
           clientRes.end();
         });
       }
@@ -340,6 +440,60 @@ export class DlpProxyServer {
     req.on('end', () => {
       callback(body);
     });
+  }
+
+  private isStreamingPayload(payload: unknown): boolean {
+    return isJsonObject(payload) && payload.stream === true;
+  }
+
+  private getModelName(payload: unknown): string {
+    return isJsonObject(payload) && typeof payload.model === 'string' ? payload.model : 'unknown';
+  }
+
+  private writeDlpBlocked(
+    res: http.ServerResponse,
+    statusCode: number,
+    violationsSummary: string,
+    scanResult: ReturnType<DlpEngine['scan']>
+  ): void {
+    const errorBody = {
+      error: {
+        message: `🛡️ [Argus Panoptes DLP] Request blocked! Confidential data detected: ${violationsSummary}`,
+        type: 'dlp_violation',
+        code: 'argus_leak_prevention',
+        violations: scanResult.entities.map(e => ({
+          category: e.category,
+          name: e.name,
+          severity: e.severity
+        }))
+      }
+    };
+    this.writeJson(res, statusCode, errorBody);
+  }
+
+  private writeJsonError(res: http.ServerResponse, statusCode: number, type: string, message: string): void {
+    this.writeJson(res, statusCode, { error: { message, type } });
+  }
+
+  private writeJson(res: http.ServerResponse, statusCode: number, body: unknown): void {
+    res.writeHead(statusCode, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(body));
+  }
+
+  private forwardResponseHeaders(headers: http.IncomingHttpHeaders): http.OutgoingHttpHeaders {
+    const excludedHeaders = new Set([
+      'connection',
+      'content-length',
+      'keep-alive',
+      'transfer-encoding'
+    ]);
+    const forwarded: http.OutgoingHttpHeaders = {};
+    for (const [name, value] of Object.entries(headers)) {
+      if (value !== undefined && !excludedHeaders.has(name.toLowerCase())) {
+        forwarded[name] = value;
+      }
+    }
+    return forwarded;
   }
 }
 

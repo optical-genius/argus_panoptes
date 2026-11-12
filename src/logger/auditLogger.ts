@@ -4,6 +4,7 @@ import * as path from 'path';
 import { AuditRecord, DlpScanResult } from '../scanner/types';
 
 export class AuditLogger {
+  private static readonly fingerprintSalt = crypto.randomBytes(32);
   private logFilePath: string;
   private recentRecords: AuditRecord[] = [];
   private maxRecentRecords = 100;
@@ -27,10 +28,11 @@ export class AuditLogger {
   }
 
   /**
-   * Hashes a secret entity value with SHA-256 for privacy-preserving auditing.
+   * Creates a process-local HMAC fingerprint for privacy-preserving auditing.
+   * The random salt prevents offline dictionary matching from the log alone.
    */
   public static hashEntity(value: string): string {
-    return crypto.createHash('sha256').update(value).digest('hex').slice(0, 16);
+    return crypto.createHmac('sha256', AuditLogger.fingerprintSalt).update(value).digest('hex').slice(0, 16);
   }
 
   /**
