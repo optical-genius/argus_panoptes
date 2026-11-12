@@ -9,6 +9,7 @@ import { AuditLogger } from './logger/auditLogger';
 import { DlpProxyServer } from './proxy/dlpProxy';
 import { ArgusStatusBar } from './views/statusBar';
 import { ArgusDashboardViewProvider } from './views/dashboardView';
+import { getVisualPromptSnippet } from './views/tokenDisplay';
 import { AgentAuditor } from './audit/agentAuditor';
 
 let proxyServer: DlpProxyServer | null = null;
@@ -100,7 +101,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
       if (action === 'View Sanitized Text') {
         const doc = await vscode.workspace.openTextDocument({
-          content: result.sanitizedText,
+          content: getVisualPromptSnippet(result.sanitizedText),
           language: editor.document.languageId
         });
         await vscode.window.showTextDocument(doc, { preview: true, viewColumn: vscode.ViewColumn.Beside });
@@ -276,7 +277,7 @@ export async function activate(context: vscode.ExtensionContext) {
         [
           { label: 'mask', description: 'Mask sensitive entities and unmask in response (Recommended)' },
           { label: 'block', description: 'Completely reject prompt if violations are found' },
-          { label: 'confirm', description: 'Show modal confirmation window with diff preview' },
+          { label: 'confirm', description: 'Block until a host confirmation flow is available' },
           { label: 'audit_only', description: 'Allow all traffic through, but log leaks to audit file' }
         ],
         { placeHolder: 'Select Guardrail Mode' }

@@ -36,6 +36,25 @@ const testIban = 'FI21 1234 5600 0007 85';
 assert(validateIban(testIban), 'Valid Finnish IBAN accepted');
 assert(!validateIban('FI21 1234 5600 0007 86'), 'Corrupted IBAN checksum rejected');
 
+console.log('\n[2b] Testing BUG-001 IBAN detection and detector boundaries...');
+const compactIban = 'FI2112345600000785';
+const spacedIban = 'FI21 1234 5600 0007 85';
+const invalidCompactIban = 'FI2112345600000786';
+const invalidSpacedIban = 'FI21 1234 5600 0007 86';
+
+const compactIbanMatches = findIbans(compactIban);
+const spacedIbanMatches = findIbans(spacedIban);
+assert(
+  compactIbanMatches.length === 1 && compactIbanMatches[0].iban === compactIban,
+  'Valid compact Finnish IBAN is detected as one complete candidate'
+);
+assert(
+  spacedIbanMatches.length === 1 && spacedIbanMatches[0].iban === spacedIban,
+  'Valid spaced Finnish IBAN is detected as one complete candidate'
+);
+assert(findIbans(invalidCompactIban).length === 0, 'Invalid compact IBAN is rejected');
+assert(findIbans(invalidSpacedIban).length === 0, 'Invalid spaced IBAN is rejected');
+
 // 3. Credit Card Luhn
 console.log('\n[3] Testing Credit Card Luhn Validator...');
 assert(validateLuhn('4532 0151 1283 0366'), 'Valid Visa test card passes Luhn');
@@ -78,10 +97,12 @@ const mockEntities = [
 const masked = vault.maskText(originalPrompt, mockEntities);
 assert(!masked.includes('131052-308T'), 'Original HETU masked from prompt');
 assert(!masked.includes('sk-proj-'), 'Original API key masked from prompt');
-assert(masked.includes('<ARGUS_FINNISH_HETU_1>'), 'Placeholder inserted for HETU');
-assert(masked.includes('<ARGUS_API_KEY_1>'), 'Placeholder inserted for API Key');
+const hetuPlaceholder = mockEntities[0].redactedPlaceholder;
+const apiKeyPlaceholder = mockEntities[1].redactedPlaceholder;
+assert(/^<ARGUS_FINNISH_HETU_[0-9a-f]{32}>$/.test(hetuPlaceholder), 'Opaque placeholder inserted for HETU');
+assert(/^<ARGUS_API_KEY_[0-9a-f]{32}>$/.test(apiKeyPlaceholder), 'Opaque placeholder inserted for API Key');
 
-const fakeModelResponse = 'Understood! I have processed data for <ARGUS_FINNISH_HETU_1> using key <ARGUS_API_KEY_1>.';
+const fakeModelResponse = `Understood! I have processed data for ${hetuPlaceholder} using key ${apiKeyPlaceholder}.`;
 const unmaskedResponse = vault.unmaskText(fakeModelResponse);
 assert(unmaskedResponse.includes('131052-308T'), 'Unmasking restores HETU in response');
 assert(unmaskedResponse.includes('sk-proj-11112222333344445555666677778888'), 'Unmasking restores API key in response');
@@ -118,6 +139,38 @@ const testConfig: ArgusConfig = {
 };
 
 const engine = new DlpEngine(testConfig, vault);
+const bug001Engine = new DlpEngine(testConfig, new SessionVault());
+
+const compactIbanScan = bug001Engine.scan(compactIban);
+const spacedIbanScan = bug001Engine.scan(spacedIban);
+const phoneScan = bug001Engine.scan('+358 40 123 4567');
+const emailScan = bug001Engine.scan('test@example.com');
+const hetuScan = bug001Engine.scan('131052-308T');
+
+assert(
+  compactIbanScan.entities.length === 1 &&
+    compactIbanScan.entities[0].category === 'IBAN' &&
+    compactIbanScan.entities[0].matchedText === compactIban,
+  'Compact IBAN is masked as IBAN, not as PHONE_NUMBER'
+);
+assert(
+  spacedIbanScan.entities.length === 1 &&
+    spacedIbanScan.entities[0].category === 'IBAN' &&
+    spacedIbanScan.entities[0].matchedText === spacedIban,
+  'Spaced IBAN is masked as IBAN, not as PHONE_NUMBER'
+);
+assert(
+  phoneScan.entities.some(e => e.category === 'PHONE_NUMBER'),
+  'Ordinary Finnish phone number remains detectable'
+);
+assert(
+  emailScan.entities.some(e => e.category === 'EMAIL'),
+  'Email detection remains functional after IBAN fix'
+);
+assert(
+  hetuScan.entities.some(e => e.category === 'FINNISH_HETU'),
+  'Finnish HETU detection remains functional after IBAN fix'
+);
 const leakText = `
 Here is our test script:
 const apiKey = "ghp_111122223333444455556666777788889999";

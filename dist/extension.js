@@ -46,6 +46,7 @@ const auditLogger_1 = require("./logger/auditLogger");
 const dlpProxy_1 = require("./proxy/dlpProxy");
 const statusBar_1 = require("./views/statusBar");
 const dashboardView_1 = require("./views/dashboardView");
+const tokenDisplay_1 = require("./views/tokenDisplay");
 const agentAuditor_1 = require("./audit/agentAuditor");
 let proxyServer = null;
 let statusBar = null;
@@ -109,7 +110,7 @@ async function activate(context) {
             const action = await vscode.window.showWarningMessage(`⚠️ Argus DLP found ${result.totalViolations} sensitive entity/entities: [${names}]`, 'View Sanitized Text', 'Open Dashboard');
             if (action === 'View Sanitized Text') {
                 const doc = await vscode.workspace.openTextDocument({
-                    content: result.sanitizedText,
+                    content: (0, tokenDisplay_1.getVisualPromptSnippet)(result.sanitizedText),
                     language: editor.document.languageId
                 });
                 await vscode.window.showTextDocument(doc, { preview: true, viewColumn: vscode.ViewColumn.Beside });
@@ -260,7 +261,7 @@ async function activate(context) {
             const modeChoice = await vscode.window.showQuickPick([
                 { label: 'mask', description: 'Mask sensitive entities and unmask in response (Recommended)' },
                 { label: 'block', description: 'Completely reject prompt if violations are found' },
-                { label: 'confirm', description: 'Show modal confirmation window with diff preview' },
+                { label: 'confirm', description: 'Block until a host confirmation flow is available' },
                 { label: 'audit_only', description: 'Allow all traffic through, but log leaks to audit file' }
             ], { placeHolder: 'Select Guardrail Mode' });
             if (modeChoice) {

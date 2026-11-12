@@ -4,6 +4,20 @@ import { DlpEngine } from '../scanner/dlpEngine';
 import { AuditLogger } from '../logger/auditLogger';
 import { DlpProxyServer } from '../proxy/dlpProxy';
 import { AgentAuditor } from '../audit/agentAuditor';
+import { createVisualScanResult, getVisualPromptSnippet } from './tokenDisplay';
+
+function escapeHtml(value: unknown): string {
+  return String(value).replace(/[&<>"']/g, character => {
+    const entities: Record<string, string> = {
+      '&': '&amp;',
+      '<': '&lt;',
+      '>': '&gt;',
+      '"': '&quot;',
+      "'": '&#39;'
+    };
+    return entities[character];
+  });
+}
 
 export class ArgusDashboardViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = 'argus.dashboardView';
@@ -46,7 +60,7 @@ export class ArgusDashboardViewProvider implements vscode.WebviewViewProvider {
           const result = this.dlpEngine.scan(data.text);
           webviewView.webview.postMessage({
             type: 'scanResult',
-            result
+            result: createVisualScanResult(result)
           });
           break;
         }
@@ -108,12 +122,12 @@ export class ArgusDashboardViewProvider implements vscode.WebviewViewProvider {
         return `
           <div style="background: var(--vscode-editor-inactiveSelectionBackground); border-left: 3px solid ${badgeColor}; padding: 8px; margin-bottom: 6px; border-radius: 4px; font-size: 11px;">
             <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
-              <span style="font-weight: 600; color: ${badgeColor}; text-transform: uppercase;">${log.action}</span>
-              <span style="color: var(--vscode-descriptionForeground); font-size: 10px;">${new Date(log.timestamp).toLocaleTimeString()} (${log.durationMs}ms)</span>
+              <span style="font-weight: 600; color: ${badgeColor}; text-transform: uppercase;">${escapeHtml(log.action)}</span>
+              <span style="color: var(--vscode-descriptionForeground); font-size: 10px;">${escapeHtml(new Date(log.timestamp).toLocaleTimeString())} (${escapeHtml(log.durationMs)}ms)</span>
             </div>
-            <div style="color: var(--vscode-foreground); margin-bottom: 4px; font-family: monospace;">${log.promptSnippet}</div>
+            <div style="color: var(--vscode-foreground); margin-bottom: 4px; font-family: monospace;">${escapeHtml(getVisualPromptSnippet(log.promptSnippet))}</div>
             <div style="display: flex; gap: 4px; flex-wrap: wrap;">
-              ${log.categories.map(c => `<span style="background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); padding: 1px 5px; border-radius: 3px; font-size: 9px;">${c}</span>`).join('')}
+              ${log.categories.map(c => `<span style="background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); padding: 1px 5px; border-radius: 3px; font-size: 9px;">${escapeHtml(c)}</span>`).join('')}
             </div>
           </div>
         `;
@@ -216,8 +230,8 @@ export class ArgusDashboardViewProvider implements vscode.WebviewViewProvider {
       </span>
     </div>
     <div style="font-size: 11px; color: var(--vscode-descriptionForeground);">
-      Proxy: <code>http://${this.config.proxyHost}:${this.config.proxyPort}/v1</code><br>
-      Target: <code>${this.config.targetBaseUrl}</code> (${this.config.targetProvider})
+      Proxy: <code>http://${escapeHtml(this.config.proxyHost)}:${escapeHtml(this.config.proxyPort)}/v1</code><br>
+      Target: <code>${escapeHtml(this.config.targetBaseUrl)}</code> (${escapeHtml(this.config.targetProvider)})
     </div>
     <button id="toggleBtn" class="btn ${isRunning ? 'btn-secondary' : ''}">
       ${isRunning ? 'Stop DLP Proxy' : 'Start DLP Proxy'}
@@ -239,19 +253,19 @@ export class ArgusDashboardViewProvider implements vscode.WebviewViewProvider {
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
       <span style="font-weight: 600;">🤖 AI Agent Egress & Shield</span>
       <span style="font-size: 10px; background: var(--vscode-badge-background); padding: 2px 6px; border-radius: 8px;">
-        ${audit.detectedAgents.length} Agent(s)
+        ${escapeHtml(audit.detectedAgents.length)} Agent(s)
       </span>
     </div>
     <div style="font-size: 11px; margin-bottom: 8px;">
       ${audit.detectedAgents.map(a => `
         <div style="padding: 4px 0; border-bottom: 1px solid var(--vscode-widget-border, #2a2a2a);">
           <div style="display: flex; justify-content: space-between;">
-            <b>${a.name}</b>
+            <b>${escapeHtml(a.name)}</b>
             <span style="color: ${a.status === 'guarded' ? '#34D399' : '#F87171'}; font-weight: 600; font-size: 10px;">
               ${a.status === 'guarded' ? '🛡️ GUARDED' : '⚠️ DIRECT CLOUD'}
             </span>
           </div>
-          <div style="font-size: 10px; color: var(--vscode-descriptionForeground); margin-top: 2px;">${a.details}</div>
+          <div style="font-size: 10px; color: var(--vscode-descriptionForeground); margin-top: 2px;">${escapeHtml(a.details)}</div>
         </div>
       `).join('')}
     </div>
@@ -270,7 +284,7 @@ export class ArgusDashboardViewProvider implements vscode.WebviewViewProvider {
     <select id="modeSelect" class="mode-select">
       <option value="mask" ${this.config.mode === 'mask' ? 'selected' : ''}>Mask (Sanitize & Unmask on Return)</option>
       <option value="block" ${this.config.mode === 'block' ? 'selected' : ''}>Block Prompt Completely</option>
-      <option value="confirm" ${this.config.mode === 'confirm' ? 'selected' : ''}>Confirm with Diff Modal</option>
+      <option value="confirm" ${this.config.mode === 'confirm' ? 'selected' : ''}>Confirm (blocks until host confirmation)</option>
       <option value="audit_only" ${this.config.mode === 'audit_only' ? 'selected' : ''}>Audit Only (Log Without Action)</option>
     </select>
   </div>
@@ -328,18 +342,25 @@ export class ArgusDashboardViewProvider implements vscode.WebviewViewProvider {
     window.addEventListener('message', event => {
       const message = event.data;
       if (message.type === 'scanResult') {
+        const escapeHtml = (value) => String(value).replace(/[&<>"']/g, character => ({
+          '&': '&amp;',
+          '<': '&lt;',
+          '>': '&gt;',
+          '"': '&quot;',
+          "'": '&#39;'
+        }[character]));
         const box = document.getElementById('scanResultBox');
         box.style.display = 'block';
         const res = message.result;
         if (res.hasViolations) {
-          box.innerHTML = '<div style="color: #F87171; font-weight: bold;">⚠️ Detected ' + res.totalViolations + ' violation(s) (' + res.scanDurationMs + 'ms):</div>' +
+          box.innerHTML = '<div style="color: #F87171; font-weight: bold;">⚠️ Detected ' + escapeHtml(res.totalViolations) + ' violation(s) (' + escapeHtml(res.scanDurationMs) + 'ms):</div>' +
             '<ul style="margin: 4px 0; padding-left: 16px;">' +
-            res.entities.map(e => '<li><b>' + e.name + '</b>: <span style="font-family: monospace;">' + e.redactedPlaceholder + '</span></li>').join('') +
+            res.entities.map(e => '<li><b>' + escapeHtml(e.name) + '</b>: <span style="font-family: monospace;" title="Dashboard-only alias; actual DLP token remains opaque.">' + escapeHtml(e.redactedPlaceholder) + '</span></li>').join('') +
             '</ul>' +
             '<div style="color: var(--vscode-descriptionForeground); margin-top: 4px;">Masked Output:</div>' +
-            '<div style="background: var(--vscode-editor-inactiveSelectionBackground); padding: 4px; border-radius: 4px; font-family: monospace; white-space: pre-wrap;">' + res.sanitizedText + '</div>';
+            '<div title="Dashboard-only aliases; actual DLP tokens remain opaque." style="background: var(--vscode-editor-inactiveSelectionBackground); padding: 4px; border-radius: 4px; font-family: monospace; white-space: pre-wrap;">' + escapeHtml(res.sanitizedText) + '</div>';
         } else {
-          box.innerHTML = '<div style="color: #34D399; font-weight: bold;">✅ Clean! No sensitive data detected (' + res.scanDurationMs + 'ms).</div>';
+          box.innerHTML = '<div style="color: #34D399; font-weight: bold;">✅ Clean! No sensitive data detected (' + escapeHtml(res.scanDurationMs) + 'ms).</div>';
         }
       }
     });
